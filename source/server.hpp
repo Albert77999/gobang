@@ -22,7 +22,7 @@ class gobang_server{
             //静态资源请求的处理
             //1. 获取到请求uri-资源路径，了解客户端请求的页面文件名称
             websocketpp::http::parser::request req = conn->get_request();
-            std::string uri = req.get_uri();
+            std::string uri = get_uri_path(req.get_uri());
             //2. 组合出文件的实际路径   相对根目录 + uri
             std::string realpath = _web_root + uri;
             //3. 如果请求的是个目录，增加一个后缀  login.html,    /  ->  /login.html
@@ -61,6 +61,51 @@ class gobang_server{
             conn->set_body(resp_body);
             conn->append_header("Content-Type", "application/json");
             return;
+        }
+        bool get_query_val(const std::string &uri, const std::string &key, std::string &val) {
+            size_t pos = uri.find('?');
+            if (pos == std::string::npos || pos + 1 >= uri.size()) {
+                return false;
+            }
+            std::string query = uri.substr(pos + 1);
+            std::vector<std::string> query_arr;
+            string_util::split(query, "&", query_arr);
+            for (const auto &item : query_arr) {
+                std::vector<std::string> kv_arr;
+                string_util::split(item, "=", kv_arr);
+                if (kv_arr.size() != 2) {
+                    continue;
+                }
+                if (kv_arr[0] == key) {
+                    val = kv_arr[1];
+                    return true;
+                }
+            }
+            return false;
+        }
+        std::string get_uri_path(const std::string &uri) {
+            size_t pos = uri.find('?');
+            if (pos == std::string::npos) {
+                return uri;
+            }
+            return uri.substr(0, pos);
+        }
+        bool get_ssid_str(wsserver_t::connection_ptr conn, std::string &ssid_str) {
+            ssid_str = conn->get_request_header("X-Session-Id");
+            if (ssid_str.empty() == false) {
+                return true;
+            }
+
+            websocketpp::http::parser::request req = conn->get_request();
+            if (get_query_val(req.get_uri(), "ssid", ssid_str)) {
+                return true;
+            }
+
+            std::string cookie_str = conn->get_request_header("Cookie");
+            if (cookie_str.empty()) {
+                return false;
+            }
+            return get_cookie_val(cookie_str, "SSID", ssid_str);
         }
         void reg(wsserver_t::connection_ptr &conn) {
             //用户注册功能请求的处理
@@ -119,7 +164,16 @@ class gobang_server{
             //4. 设置响应头部：Set-Cookie,将sessionid通过cookie返回
             std::string cookie_ssid = "SSID=" + std::to_string(ssp->ssid());
             conn->append_header("Set-Cookie", cookie_ssid);
-            return http_resp(conn, true, websocketpp::http::status_code::ok , "登录成功");
+            Json::Value resp_json;
+            resp_json["result"] = true;
+            resp_json["reason"] = "登录成功";
+            resp_json["ssid"] = (Json::UInt64)ssp->ssid();
+            std::string resp_body;
+            json_util::serialize(resp_json, resp_body);
+            conn->set_status(websocketpp::http::status_code::ok);
+            conn->set_body(resp_body);
+            conn->append_header("Content-Type", "application/json");
+            return;
         }
         bool get_cookie_val(const std::string &cookie_str, const std::string &key,  std::string &val) {
             // Cookie: SSID=XXX; path=/; 
@@ -143,16 +197,9 @@ class gobang_server{
             //用户信息获取功能请求的处理
             Json::Value err_resp;
             // 1. 获取请求信息中的Cookie，从Cookie中获取ssid
-            std::string cookie_str = conn->get_request_header("Cookie");
-            if (cookie_str.empty()) {
-                //如果没有cookie，返回错误：没有cookie信息，让客户端重新登录
-                return http_resp(conn, true, websocketpp::http::status_code::bad_request, "找不到cookie信息，请重新登录");
-            }
-            // 1.5. 从cookie中取出ssid
             std::string ssid_str;
-            bool ret = get_cookie_val(cookie_str, "SSID", ssid_str);
+            bool ret = get_ssid_str(conn, ssid_str);
             if (ret == false) {
-                //cookie中没有ssid，返回错误：没有ssid信息，让客户端重新登录
                 return http_resp(conn, true, websocketpp::http::status_code::bad_request, "找不到ssid信息，请重新登录");
             }
             // 2. 在session管理中查找对应的会话信息
@@ -181,7 +228,7 @@ class gobang_server{
             wsserver_t::connection_ptr conn = _wssrv.get_con_from_hdl(hdl);
             websocketpp::http::parser::request req = conn->get_request();
             std::string method = req.get_method();
-            std::string uri = req.get_uri();
+            std::string uri = get_uri_path(req.get_uri());
             if (method == "POST" && uri == "/reg") {
                 return reg(conn);
             }else if (method == "POST" && uri == "/login") {
@@ -199,21 +246,10 @@ class gobang_server{
         }
         session_ptr get_session_by_cookie(wsserver_t::connection_ptr conn) {
             Json::Value err_resp;
-            // 1. 获取请求信息中的Cookie，从Cookie中获取ssid
-            std::string cookie_str = conn->get_request_header("Cookie");
-            if (cookie_str.empty()) {
-                //如果没有cookie，返回错误：没有cookie信息，让客户端重新登录
-                err_resp["optype"] = "hall_ready";
-                err_resp["reason"] = "没有找到cookie信息，需要重新登录";
-                err_resp["result"] = false;
-                ws_resp(conn, err_resp);
-                return session_ptr();
-            }
-            // 1.5. 从cookie中取出ssid
             std::string ssid_str;
-            bool ret = get_cookie_val(cookie_str, "SSID", ssid_str);
+            bool ret = get_ssid_str(conn, ssid_str);
             if (ret == false) {
-                //cookie中没有ssid，返回错误：没有ssid信息，让客户端重新登录
+                //请求中没有ssid，返回错误：没有ssid信息，让客户端重新登录
                 err_resp["optype"] = "hall_ready";
                 err_resp["reason"] = "没有找到SSID信息，需要重新登录";
                 err_resp["result"] = false;
@@ -240,15 +276,14 @@ class gobang_server{
             if (ssp.get() == nullptr) {
                 return;
             }
-            //2. 判断当前客户端是否是重复登录
-            if (_om.is_in_game_hall(ssp->get_user()) || _om.is_in_game_room(ssp->get_user())) {
-                resp_json["optype"] = "hall_ready";
-                resp_json["reason"] = "玩家重复登录！";
-                resp_json["result"] = false;
-                return ws_resp(conn, resp_json);
+            uint64_t uid = ssp->get_user();
+            //2. 如果玩家正处于房间中，则视为主动离开房间返回大厅
+            if (_om.is_in_game_room(uid)) {
+                _om.exit_game_room(uid);
+                _rm.remove_room_user(uid);
             }
             //3. 将当前客户端以及连接加入到游戏大厅
-            _om.enter_game_hall(ssp->get_user(), conn);
+            _om.enter_game_hall(uid, conn);
             //4. 给客户端响应游戏大厅连接建立成功
             resp_json["optype"] = "hall_ready";
             resp_json["result"] = true;
@@ -263,39 +298,49 @@ class gobang_server{
             if (ssp.get() == nullptr) {
                 return;
             }
-            //2. 当前用户是否已经在在线用户管理的游戏房间或者游戏大厅中---在线用户管理
-            if (_om.is_in_game_hall(ssp->get_user()) || _om.is_in_game_room(ssp->get_user())) {
-                resp_json["optype"] = "room_ready";
-                resp_json["reason"] = "玩家重复登录！";
-                resp_json["result"] = false;
-                return ws_resp(conn, resp_json);
+            uint64_t uid = ssp->get_user();
+            //2. 从大厅页跳转到房间页时，允许玩家从大厅在线状态平滑切换到房间在线状态
+            if (_om.is_in_game_hall(uid)) {
+                _om.exit_game_hall(uid);
             }
             //3. 判断当前用户是否已经创建好了房间 --- 房间管理
-            room_ptr rp = _rm.get_room_by_uid(ssp->get_user());
+            room_ptr rp = _rm.get_room_by_uid(uid);
             if (rp.get() == nullptr) {
                 resp_json["optype"] = "room_ready";
                 resp_json["reason"] = "没有找到玩家的房间信息";
                 resp_json["result"] = false;
                 return ws_resp(conn, resp_json);
             }
-            //4. 将当前用户添加到在线用户管理的游戏房间中
-            _om.enter_game_room(ssp->get_user(), conn);
+            //4. 将当前用户添加到在线用户管理的游戏房间中；如果是刷新重连，则覆盖旧连接
+            _om.enter_game_room(uid, conn);
             //5. 将session重新设置为永久存在
             _sm.set_session_expire_time(ssp->ssid(), SESSION_FOREVER);
             //6. 回复房间准备完毕
             resp_json["optype"] = "room_ready";
             resp_json["result"] = true;
             resp_json["room_id"] = (Json::UInt64)rp->id();
-            resp_json["uid"] = (Json::UInt64)ssp->get_user();
+            resp_json["uid"] = (Json::UInt64)uid;
             resp_json["white_id"] = (Json::UInt64)rp->get_white_user();
             resp_json["black_id"] = (Json::UInt64)rp->get_black_user();
-            return ws_resp(conn, resp_json);
+            resp_json["ready"] = rp->is_all_player_online();
+            ws_resp(conn, resp_json);
+
+            if (rp->is_all_player_online()) {
+                Json::Value start_resp;
+                start_resp["optype"] = "game_start";
+                start_resp["result"] = true;
+                start_resp["room_id"] = (Json::UInt64)rp->id();
+                start_resp["white_id"] = (Json::UInt64)rp->get_white_user();
+                start_resp["black_id"] = (Json::UInt64)rp->get_black_user();
+                rp->broadcast(start_resp);
+            }
+            return;
         }
         void wsopen_callback(websocketpp::connection_hdl hdl) {
             //websocket长连接建立成功之后的处理函数
             wsserver_t::connection_ptr conn = _wssrv.get_con_from_hdl(hdl);
             websocketpp::http::parser::request req = conn->get_request();
-            std::string uri = req.get_uri();
+            std::string uri = get_uri_path(req.get_uri());
             if (uri == "/hall") {
                 //建立了游戏大厅的长连接
                 return wsopen_game_hall(conn);
@@ -312,9 +357,12 @@ class gobang_server{
                 return;
             }
             //1. 将玩家从游戏大厅中移除
-            _om.exit_game_hall(ssp->get_user());
-            //2. 将session恢复生命周期的管理，设置定时销毁
-            _sm.set_session_expire_time(ssp->ssid(), SESSION_TIMEOUT);
+            uint64_t uid = ssp->get_user();
+            _om.exit_game_hall(uid);
+            //2. 只有玩家不在房间中时，才将session恢复为定时销毁
+            if (_om.is_in_game_room(uid) == false) {
+                _sm.set_session_expire_time(ssp->ssid(), SESSION_TIMEOUT);
+            }
         }
         void wsclose_game_room(wsserver_t::connection_ptr conn) {
             //获取会话信息，识别客户端
@@ -333,7 +381,7 @@ class gobang_server{
             //websocket连接断开前的处理
             wsserver_t::connection_ptr conn = _wssrv.get_con_from_hdl(hdl);
             websocketpp::http::parser::request req = conn->get_request();
-            std::string uri = req.get_uri();
+            std::string uri = get_uri_path(req.get_uri());
             if (uri == "/hall") {
                 //建立了游戏大厅的长连接
                 return wsclose_game_hall(conn);
@@ -414,7 +462,7 @@ class gobang_server{
             //websocket长连接通信处理
             wsserver_t::connection_ptr conn = _wssrv.get_con_from_hdl(hdl);
             websocketpp::http::parser::request req = conn->get_request();
-            std::string uri = req.get_uri();
+            std::string uri = get_uri_path(req.get_uri());
             if (uri == "/hall") {
                 //建立了游戏大厅的长连接
                 return wsmsg_game_hall(conn, msg);

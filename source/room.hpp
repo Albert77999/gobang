@@ -75,24 +75,28 @@ class room {
         void add_black_user(uint64_t uid) { _black_id = uid; _player_count++; }
         uint64_t get_white_user() { return _white_id; }
         uint64_t get_black_user() { return _black_id; }
+        bool is_all_player_online() {
+            return _online_user->is_in_game_room(_white_id) &&
+                   _online_user->is_in_game_room(_black_id);
+        }
 
         /*处理下棋动作*/
         Json::Value handle_chess(Json::Value &req) {
             Json::Value json_resp = req;
-            // 2. 判断房间中两个玩家是否都在线，任意一个不在线，就是另一方胜利。
+            // 2. 判断房间中两个玩家是否都在线，未全部就绪前不允许走棋。
             int chess_row = req["row"].asInt();
             int chess_col = req["col"].asInt();
             uint64_t cur_uid = req["uid"].asUInt64();
             if (_online_user->is_in_game_room(_white_id) == false) {
-                json_resp["result"] = true;
-                json_resp["reason"] = "运气真好！对方掉线，不战而胜！";
-                json_resp["winner"] = (Json::UInt64)_black_id;
+                json_resp["result"] = false;
+                json_resp["reason"] = "白棋玩家尚未进入房间，请稍候";
+                json_resp["winner"] = (Json::UInt64)0;
                 return json_resp;
             }
             if (_online_user->is_in_game_room(_black_id) == false) {
-                json_resp["result"] = true;
-                json_resp["reason"] = "运气真好！对方掉线，不战而胜！";
-                json_resp["winner"] = (Json::UInt64)_white_id;
+                json_resp["result"] = false;
+                json_resp["reason"] = "黑棋玩家尚未进入房间，请稍候";
+                json_resp["winner"] = (Json::UInt64)0;
                 return json_resp;
             }
             // 3. 获取走棋位置，判断当前走棋是否合理（位置是否已经被占用）
@@ -240,8 +244,8 @@ class room_manager{
 
             std::unique_lock<std::mutex> lock(_mutex);
             room_ptr rp(new room(_next_rid, _tb_user, _online_user));
-            rp->add_white_user(uid1);
-            rp->add_black_user(uid2);
+            rp->add_black_user(uid1);
+            rp->add_white_user(uid2);
             //3. 将房间信息管理起来
             _rooms.insert(std::make_pair(_next_rid, rp));
             _users.insert(std::make_pair(uid1, _next_rid));
@@ -299,6 +303,10 @@ class room_manager{
             room_ptr rp = get_room_by_uid(uid);
             if (rp.get() == nullptr) {
                 return;
+            }
+            {
+                std::unique_lock<std::mutex> lock(_mutex);
+                _users.erase(uid);
             }
             //处理房间中玩家退出动作
             rp->handle_exit(uid);

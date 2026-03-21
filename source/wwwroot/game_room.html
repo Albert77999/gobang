@@ -35,24 +35,32 @@
         let chess = document.getElementById('chess');
         let context = chess.getContext('2d');//获取chess控件的2d画布
         
-        var ws_url = "ws://" + location.host + "/room";
+        var ssid = sessionStorage.getItem("gobang_ssid");
+        var ws_url = "ws://" + location.host + "/room?ssid=" + encodeURIComponent(ssid || "");
         var ws_hdl = new WebSocket(ws_url);
 
         var room_info = null;//用于保存房间信息 
-        var is_me;
+        var is_me = false;
+        var game_ready = false;
+        var game_initialized = false;
+        var board_image_loaded = false;
+        var board_image = new Image();
 
         function initGame() {
             initBoard();
             context.strokeStyle = "#BFBFBF";
-            // 背景图片
-            let logo = new Image();
-            logo.src = "image/sky.jpeg";
-            logo.onload = function () {
-                // 绘制图片
-                context.drawImage(logo, 0, 0, 450, 450);
-                // 绘制棋盘
-                drawChessBoard();
+            board_image_loaded = false;
+            board_image = new Image();
+            board_image.src = "image/sky.jpeg";
+            board_image.onload = function () {
+                board_image_loaded = true;
+                renderBoard();
             }
+            board_image.onerror = function () {
+                board_image_loaded = false;
+                renderBoard();
+            }
+            renderBoard();
         }
         function initBoard() {
             for (let i = 0; i < BOARD_ROW_AND_COL; i++) {
@@ -64,6 +72,8 @@
         }
         // 绘制棋盘网格线
         function drawChessBoard() {
+            context.fillStyle = "#d8a45d";
+            context.fillRect(0, 0, 450, 450);
             for (let i = 0; i < BOARD_ROW_AND_COL; i++) {
                 context.moveTo(15 + i * 30, 15);
                 context.lineTo(15 + i * 30, 430); //横向的线条
@@ -71,6 +81,22 @@
                 context.moveTo(15, 15 + i * 30);
                 context.lineTo(435, 15 + i * 30); //纵向的线条
                 context.stroke();
+            }
+        }
+        function renderBoard() {
+            context.clearRect(0, 0, 450, 450);
+            drawChessBoard();
+            if (board_image_loaded) {
+                context.drawImage(board_image, 0, 0, 450, 450);
+                drawChessBoard();
+            }
+            for (let row = 0; row < BOARD_ROW_AND_COL; row++) {
+                for (let col = 0; col < BOARD_ROW_AND_COL; col++) {
+                    if (chessBoard[row][col] == 0) {
+                        continue;
+                    }
+                    oneStep(col, row, chessBoard[row][col] == 1);
+                }
             }
         }
         //绘制棋子
@@ -97,6 +123,10 @@
             //      1. 当前是否轮到自己走棋了
             //      2. 当前位置是否已经被占用
             //  2. 向服务器发送走棋请求
+            if (!game_ready) {
+                alert("对方尚未进入房间，请稍候");
+                return;
+            }
             if (!is_me) {
                 alert("等待对方走棋....");
                 return;
@@ -116,6 +146,10 @@
             send_chess(row, col);
         }
         function send_chess(r, c) {
+            if (!room_info || room_info.room_id === undefined) {
+                alert("房间尚未初始化完成，请稍后重试");
+                return;
+            }
             var chess_info = {
                 optype : "put_chess",
                 room_id: room_info.room_id,
@@ -147,16 +181,38 @@
                 screen_div.innerHTML = "轮到对方走棋...";
             }
         }
+        function set_waiting_screen() {
+            var screen_div = document.getElementById("screen");
+            screen_div.innerHTML = "等待另一位玩家进入房间...";
+        }
         ws_hdl.onmessage = function(evt) {
             //1. 在收到room_ready之后进行房间的初始化
             //  1. 将房间信息保存起来
             var info = JSON.parse(evt.data);
             console.log(JSON.stringify(info));
             if (info.optype == "room_ready") {
+                if (info.result == false) {
+                    alert(info.reason);
+                    location.replace("/game_hall.html");
+                    return;
+                }
                 room_info = info;
-                is_me = room_info.uid == room_info.white_id ? true : false;
+                if (!game_initialized) {
+                    initGame();
+                    game_initialized = true;
+                }
+                game_ready = info.ready === true;
+                if (game_ready) {
+                    is_me = room_info.uid == room_info.black_id ? true : false;
+                    set_screen(is_me);
+                }else {
+                    is_me = false;
+                    set_waiting_screen();
+                }
+            }else if (info.optype == "game_start") {
+                game_ready = true;
+                is_me = room_info.uid == room_info.black_id ? true : false;
                 set_screen(is_me);
-                initGame();
             }else if (info.optype == "put_chess"){
                 console.log("put_chess" + evt.data);
                 //2. 走棋操作
@@ -168,15 +224,14 @@
                 //当前走棋的用户id，与我自己的用户id相同，就是我自己走棋，走棋之后，就轮到对方了
                 is_me = info.uid == room_info.uid ? false : true;
                 //绘制棋子的颜色，应该根据当前下棋角色的颜色确定
-                isWhite = info.uid == room_info.white_id ? true : false;
-                //绘制棋子
+                let isWhite = info.uid == room_info.white_id ? true : false;
                 if (info.row != -1 && info.col != -1){
-                    oneStep(info.col, info.row, isWhite);
-                    //设置棋盘信息
-                    chessBoard[info.row][info.col] = 1;
+                    chessBoard[info.row][info.col] = isWhite ? 1 : 2;
+                    renderBoard();
                 }
                 //是否有胜利者
                 if (info.winner == 0) {
+                    set_screen(is_me);
                     return;
                 }
                 var screen_div = document.getElementById("screen");
