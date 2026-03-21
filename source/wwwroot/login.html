@@ -32,6 +32,9 @@
             <div class="row">
                 <button id="submit" onclick="login()">提交</button>
             </div>
+            <div class="row">
+                <a href="/register.html">没有账号？点击注册</a>
+            </div>
         </div>
 
     </div>
@@ -53,6 +56,7 @@
                 data: JSON.stringify(login_info),
                 success: function(result) {
                     //  3. 如果验证通过，则跳转游戏大厅页面
+                    sessionStorage.setItem("gobang_ssid", result.ssid);
                     alert("登录成功");
                     window.location.assign("/game_hall.html");
                 },

@@ -1,6 +1,7 @@
 #include "room.hpp"
 #include "session.hpp"
 #include "matcher.hpp"
+#include "server.hpp"
 
 #define HOST "127.0.0.1"
 #define USER "root"
@@ -94,9 +95,7 @@ void online_test()
 }
 int main()
 {
-    user_table ut(HOST,USER,PASS,DBNAME,3306);
-    online_manager om;
-    room_manager rm(&ut,&om);
-    matcher mt(&rm,&ut,&om);
+    gobang_server _server(HOST, USER, PASS, DBNAME);
+    _server.start(8085);
     return 0;
 }

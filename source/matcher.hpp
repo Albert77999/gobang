@@ -30,12 +30,15 @@ public:
     {
         std::unique_lock<std::mutex> lock(_mutex);
         _cond.wait(lock, [&]()
-                   { _list.size() >= 2 };)
+                   { return _list.size() >= 2;});
     }
     void push(const T &data)
     {
+        {
         std::unique_lock<std::mutex> lock(_mutex);
         _list.push_back(data);
+        }
+        _cond.notify_all();
     }
     bool pop(T &data)
     {
@@ -68,7 +71,6 @@ private:
             bool ret = mq.pop(uid1);
             if (!ret)
             {
-                this->add(uid2);
                 continue;
             }
             ret = mq.pop(uid2);
@@ -100,7 +102,7 @@ private:
             }
             // 5.对两个玩家进行响应
             Json::Value resp;
-            resp["optype"] = "match_sucess";
+            resp["optype"] = "match_success";
             resp["result"] = true;
             std::string body;
             json_util::serialize(resp, body);
@@ -164,6 +166,7 @@ public:
         {
             _q_super.push(uid);
         }
+        return true;
     }
     bool del(int uid)
     {
@@ -177,15 +180,16 @@ public:
         int score = user["score"].asInt();
         if (score < 2000)
         {
-            _q_normal.pop(uid);
+            _q_normal.remove(uid);
         }
         else if (score >= 2000 && score < 3000)
         {
-            _q_high.pop(uid);
+            _q_high.remove(uid);
         }
         else
         {
-            _q_super.pop(uid);
+            _q_super.remove(uid);
         }
+        return true;
     }
 };

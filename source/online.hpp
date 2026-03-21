@@ -22,12 +22,12 @@ public:
     void enter_game_hall(int uid, wsserver_t::connection_ptr &conn)
     {
         std::unique_lock<std::mutex> lock(_mutex);
-        _hall_user.insert({uid, conn});
+        _hall_user[uid] = conn;
     }
     void enter_game_room(int uid, wsserver_t::connection_ptr &conn)
     {
         std::unique_lock<std::mutex> lock(_mutex);
-        _room_user.insert({uid, conn});
+        _room_user[uid] = conn;
     }
     // websocket连接断开的时候才会移除游戏大厅 & 游戏房间在线用户管理
     void exit_game_hall(int uid)
